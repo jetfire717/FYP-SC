@@ -1,0 +1,315 @@
+import gurobipy as gp
+import pandas as pd
+import os
+from dotenv import load_dotenv
+
+# Create an environment with your WLS license
+load_dotenv()
+WLSACCESSID = os.getenv("WLSACCESSID")
+WLSSECRET = os.getenv("WLSSECRET")
+LICENSEID = int(os.getenv("LICENSEID"))
+params = {
+"WLSACCESSID": WLSACCESSID,
+"WLSSECRET": WLSSECRET,
+"LICENSEID": LICENSEID,
+}
+
+forecast_series = pd.read_csv(r"Demand_Forecast.csv")
+forecast_series["Forecasted_Demand"] = forecast_series["Forecasted_Demand"].astype(int)
+
+demand_std_by_sku = (
+    forecast_series.groupby('SKU')['Forecasted_Demand'].std()
+)
+forecast_series["Date"] = pd.to_datetime(forecast_series["Date"])
+
+# Sort by SKU then Date
+forecast_series = forecast_series.sort_values(["SKU", "Date"])
+
+# Create a within-SKU sequence index: 0,1,2,... for each SKU group
+forecast_series["t"] = forecast_series.groupby("SKU").cumcount()
+
+# Pivot: rows = position in the sequence, columns = SKU, values = Forecasted_Demand
+demand_df = forecast_series.pivot(index="t", columns="SKU", values="Forecasted_Demand").reset_index(drop=True)
+
+demand_std_df = demand_df.std().astype(int)
+
+import pandas as pd
+import numpy as np
+from typing import Union, Dict, Optional
+from scipy.stats import norm
+import gurobipy as gp
+from gurobipy import GRB
+
+
+# Input globals (filled with recommended figures)
+
+# Holding cost per unit (currency units per year)
+holding_cost = {
+    "212_Malaysia": 1.00,    # low-cost consumer item
+    "449_Australia": 2.00,   # higher-volume, moderate holding cost
+    "797_Malaysia": 1.50,    # mid-volume spare part
+    "852_Australia": 3.00,   # very high-volume, larger unit handling cost
+    "864_Australia": 4.00,   # premium / higher-value SKU
+}
+
+# Fixed cost per order (administration + freight setup)
+order_cost = 750.0          # K (currency per order)
+
+# Unit purchase cost (assumed uniform here; replace per SKU if needed)
+unit_cost = 5.0             # c (currency per unit)
+
+# Maximum inventory carrying cost threshold (per unit; used as constraint caps)
+max_inventory_cost = {
+    "212_Malaysia": 2.0,
+    "449_Australia": 10.0,
+    "797_Malaysia": 8.0,
+    "852_Australia": 2.5,
+    "864_Australia": 0.5,
+}
+
+# Penalty cost for stockout per unit of unmet demand
+stockout_cost = 200.0       # p (currency per unit short)
+
+# Target service levels (per-SKU). Use use_global_csl=True to override with global_service_level_target.
+service_level_target = {
+    "212_Malaysia": 0.95,
+    "449_Australia": 0.90,
+    "797_Malaysia": 0.90,
+    "852_Australia": 0.90,
+    "864_Australia": 0.90,
+}
+
+# Initial on-hand inventory (units) — reasonable starting buffers (adjust to real stock counts)
+initial_inventory = {
+    "212_Malaysia": 3000,
+    "449_Australia": 25000,
+    "797_Malaysia": 2000,
+    "852_Australia": 30000,
+    "864_Australia": 3000,
+}
+
+# Use a single global cycle service level (override per-SKU) if True
+use_global_csl = False
+global_service_level_target = 0.90
+
+# Big-M for MIP formulations (set to a large finite number to avoid numerical issues)
+bigM = 1_000_000
+
+# Solver messaging (True to show solver logs)
+solver_msg = False
+
+# Lead time expressed in months
+# Per-SKU lead time dictionary for realism
+lead_time = {
+    "212_Malaysia": 1,   # 1 month
+    "449_Australia": 2,  # 2 months (longer transit / production)
+    "797_Malaysia": 1,   # 1 month
+    "852_Australia": 2,  # 2 months
+    "864_Australia": 1,  # 1 month
+}
+###
+
+def to_dict(value, default=0.0):
+    if isinstance(value, dict):
+        return {sku: float(value.get(sku, default)) for sku in skus}
+    else:
+        return {sku: float(value) for sku in skus}
+
+demand = demand_df.to_dict(orient='list')
+demand_std = demand_std_df.to_dict()
+
+T = len(next(iter(demand.values())))
+periods = list(range(T))
+skus = list(demand.keys())
+
+h = to_dict(holding_cost, 2)
+K = to_dict(order_cost, 400)
+c = to_dict(unit_cost, 5)
+r = to_dict(max_inventory_cost, default=0.5)
+p = to_dict(stockout_cost, 10.0)
+sl = to_dict(service_level_target, global_service_level_target)
+
+# Max Inventory is capped at some multiple of max demand as a constrained upper bound
+demand_mean = {sku: float(np.mean(demand[sku])) for sku in skus}
+Imax_ub = {sku: 3 * demand_mean[sku] for sku in skus}
+
+# default initial inventory = 0 unless specified
+I0 = {sku: 0.0 for sku in skus}
+if initial_inventory:
+    for sku, val in initial_inventory.items():
+        if sku in I0:
+            I0[sku] = float(val)
+
+if bigM is None:
+    M = {sku: Imax_ub[sku] for sku in skus}
+else:
+    M = to_dict(bigM)
+
+# lead time per SKU - default to 0 unless specified
+if isinstance(lead_time, dict):
+    L = {sku: int(lead_time.get(sku, 0)) for sku in skus}
+else:
+    L = {sku: int(lead_time) for sku in skus}
+
+safety_stock = {}
+for s in skus:
+    alpha = sl[s]
+    z = norm.ppf(alpha)
+    std_sum = demand_std[s]
+    safety_stock[s] = float(z * std_sum)
+
+# Create Gurobi model
+model = gp.Model("Inventory_MILP_MultiSKU_with_SafetyStock", env=env)
+model.setParam('OutputFlag', 1 if solver_msg else 0)
+# OPTIGUIDE DATA CODE GOES HERE
+
+# Create variables as tupledicts keyed by (sku, period)
+Q = model.addVars(skus, periods, lb=0.0, name="OrderQty", vtype=GRB.CONTINUOUS)
+I = model.addVars(skus, periods, lb=0.0, name="Inventory", vtype=GRB.CONTINUOUS)
+Imax_var = model.addVars(skus, periods, lb=0.0, name="MaxInventory", vtype=GRB.CONTINUOUS)
+y = model.addVars(skus, periods, name="OrderYN", vtype=GRB.BINARY)
+S = model.addVars(skus, periods, lb=0.0, name="Stockout", vtype=GRB.CONTINUOUS)
+Z = model.addVars(skus, periods, name="NoStockout", vtype=GRB.BINARY)
+
+# Set upper limit of variable max inventory (defined earlier as Imax_ub)
+for s in skus:
+    for t in periods:
+        Imax_var[s, t].UB = Imax_ub[s]
+
+# Objective
+obj = gp.quicksum(
+    h[s] * I[s, t] + K[s] * y[s, t] + c[s] * Q[s, t] + p[s] * S[s, t] + r[s] * Imax_var[s, t]
+    for s in skus for t in periods
+)
+model.setObjective(obj, GRB.MINIMIZE)
+
+### Constraints ###
+for s in skus:
+    Ls = L[s]
+    for idx, t in enumerate(periods):
+        demand_st = float(demand[s][t])
+        if idx == 0:
+            # I[s,t] == I0 + Q[s,t] - demand + S[s,t]
+            model.addConstr(I[s, t] == I0[s] + Q[s, t] - demand_st + S[s, t],
+                            name=f"inv_balance_{s}_{t}")
+        else:
+            t_prev = periods[idx - 1]
+            arrival_idx = idx - Ls
+            if arrival_idx >= 0:
+                t_arrival = periods[int(arrival_idx)]
+                # inventory previous + arrival from Q at arrival period - demand + stockout
+                model.addConstr(I[s, t] == I[s, t_prev] + Q[s, t_arrival] - demand_st + S[s, t],
+                                name=f"inv_balance_{s}_{t}")
+            else:
+                # Still waiting for first arrivals
+                model.addConstr(I[s, t] == I[s, t_prev] - demand_st + S[s, t],
+                                name=f"inv_balance_{s}_{t}")
+
+        # Inventory bounds and safety stock
+        model.addConstr(I[s, t] <= Imax_var[s, t], name=f"I_le_MaxInv_{s}_{t}")
+        model.addConstr(I[s, t] >= safety_stock[s], name=f"safety_stock_{s}_{t}")
+
+        # Linking order quantity and binary
+        model.addConstr(Q[s, t] <= M[s] * y[s, t], name=f"bigM_Qy_{s}_{t}")
+        arrival_idx = idx + Ls
+        if arrival_idx < T:
+            t_arrival = periods[int(arrival_idx)]
+            # ensure capacity in arrival period can accommodate the arriving order when y==1
+            model.addConstr(Q[s, t] <= Imax_var[s, t_arrival] * y[s, t],
+                            name=f"Q_le_Imax_arrival_{s}_{t}_to_{t_arrival}")
+
+        # Stockout linking with Z
+        model.addConstr(S[s, t] <= demand_st * (1.0 - Z[s, t]), name=f"stockout_Z_{s}_{t}")
+
+    # Service level per SKU (period-level no-stockout count >= sl[s] * T)
+    model.addConstr(gp.quicksum(Z[s, t] for t in periods) >= float(sl[s]) * T,
+                    name=f"service_level_{s}")
+
+# Global CSL if requested
+if use_global_csl:
+    model.addConstr(gp.quicksum(Z[s, t] for s in skus for t in periods) >=
+                    float(global_service_level_target) * (len(skus) * T),
+                    name="global_service_level")
+
+# Optimize
+model.optimize()
+m = model
+
+# OPTIGUIDE CONSTRAINT CODE GOES HERE
+
+m.update()
+model.optimize()
+
+if model.Status not in (GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL) or model.SolCount == 0:
+    raise RuntimeError(f"No usable solution. Status {model.Status}, SolCount {model.SolCount}")
+
+# bulk-get variable values
+Q_vals = model.getAttr("X", Q)
+I_vals = model.getAttr("X", I)
+Imax_vals = model.getAttr("X", Imax_var)
+y_vals = model.getAttr("X", y)
+S_vals = model.getAttr("X", S)
+Z_vals = model.getAttr("X", Z)
+
+records = []
+for s in skus:
+    for t in periods:
+        demand_st = float(demand[s][t])
+        q_val = Q_vals.get((s, t), None)
+        y_val = y_vals.get((s, t), None)
+        i_val = I_vals.get((s, t), None)
+        s_val = S_vals.get((s, t), None)
+        z_val = Z_vals.get((s, t), None)
+
+        # I_max is a plain dict of numbers — read it directly
+        imax_val = Imax_vals.get((s, t), None)
+
+        records.append({
+            "SKU": s,
+            "Period": t,
+            "OrderQty": float(q_val) if q_val is not None else None,
+            "OrderYN": int(round(y_val)) if y_val is not None else None,
+            "MaxInventory": float(imax_val) if imax_val is not None else None,
+            "Inventory": float(i_val) if i_val is not None else None,
+            "Stockout": float(s_val) if s_val is not None else None,
+            "NoStockout": int(round(z_val)) if z_val is not None else None,
+            "SafetyStock": safety_stock[s],
+            "DemandQty": demand_st
+        })
+
+result_df = pd.DataFrame(records)
+
+# Return gurobi var objects for inspection purpose (module-level result)
+solution_vars = {
+    "Q": Q, "I": I, "y": y, "Stockout": S, "NoStockout": Z, "MaxInventoryVar": Imax_var
+}
+
+res = {
+    "solution": solution_vars,
+    "result_df": result_df,
+    "safety_stock": safety_stock,
+    "M": M,
+    "gurobi_model": model
+}
+# End module-level solver
+'''
+example_qa = """
+-----------
+Question: What if service level for all SKUs become 90%?
+Answer Code:
+```python
+service_level_target = 0.9
+```
+
+Question: What if holding cost increase by 20% for all SKUs?
+Answer Code:
+try:
+    if isinstance(holding_cost, dict):
+        # scale every provided SKU value safely
+        holding_cost = {sku: 1.2 * float(val) for sku, val in holding_cost.items()}
+    else:
+        # scalar or None: scale scalar or use default 2.0
+        holding_cost = 1.2 * float(holding_cost) if holding_cost is not None else 1.2 * 2.0
+except Exception:
+    # fallback: set a safe scalar if anything unexpected happens
+    holding_cost = 1.2 * 2.0
