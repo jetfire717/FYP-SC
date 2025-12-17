@@ -13,6 +13,7 @@ params = {
 "WLSSECRET": WLSSECRET,
 "LICENSEID": LICENSEID,
 }
+env = gp.Env(params=params)
 
 forecast_series = pd.read_csv(r"Demand_Forecast.csv")
 forecast_series["Forecasted_Demand"] = forecast_series["Forecasted_Demand"].astype(int)
@@ -292,4 +293,3 @@ res = {
     "gurobi_model": model
 }
 # End module-level solver
-

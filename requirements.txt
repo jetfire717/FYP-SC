@@ -1,0 +1,11 @@
+gurobipy>=10.0
+optiguide
+autogen
+pandas>=1.5
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+python-dotenv>=1.0
+openai>=1.0
+requests>=2.30
+typing-extensions>=4.5
