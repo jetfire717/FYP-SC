@@ -2,6 +2,7 @@ import gurobipy as gp
 import pandas as pd
 import os
 from dotenv import load_dotenv
+from graph_plot import plot_inventory_info
 
 # Create an environment with your WLS license
 load_dotenv()

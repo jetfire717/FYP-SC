@@ -13,6 +13,7 @@ from autogen.agentchat import Agent, UserProxyAgent
 from optiguide.optiguide import OptiGuideAgent
 
 import pandas as pd
+import numpy as np
 import re
 import requests  # for loading the example source code
 import openai
@@ -26,10 +27,8 @@ from scipy.stats import norm
 from pathlib import Path
 from typing import Dict, Union, Optional
 
-import matplotlib.pyplot as plt
 
-
-"""**Initialisation**"""
+### Initialisation ###
 
 # Create an environment with your WLS license
 load_dotenv()
@@ -61,7 +60,7 @@ llm_config = {
 
 config_list = llm_config["config_list"]
 
-"""**Supply Chain File (csv)**"""
+### Import Supply Chain File (csv) ###
 
 import pandas as pd
 forecast_series = pd.read_csv(r"Demand_Forecast.csv")
@@ -84,50 +83,6 @@ demand_df = forecast_series.pivot(index="t", columns="SKU", values="Forecasted_D
 demand_std_df = demand_df.std().astype(int)
 
 
-import pandas as pd
-import numpy as np
-from typing import Union, Dict, Optional
-from scipy.stats import norm
-import gurobipy as gp
-from gurobipy import GRB
-
-
-
-
-
-### Visualisation ###
-
-def plot_inventory_info(df, sku):
-    # Select specified SKU to plot
-    sku_df = df[df['SKU'] == sku].sort_values('Period')
-
-    periods = sku_df['Period']
-    inventory = sku_df['Inventory']
-    max_inventory = float(sku_df['MaxInventory'].iloc[0])
-    demand = sku_df['DemandQty']
-    order_qty = sku_df['OrderQty']
-    safety_stock = sku_df['SafetyStock'].iloc[0]
-
-    plt.figure(figsize=(12,6))
-
-    plt.plot(periods, inventory, marker='o', label='Inventory', color='blue')
-
-    plt.plot(periods, sku_df['MaxInventory'].astype(float), linestyle='--', marker='s', color='maroon', label='Max Inventory')
-
-
-    plt.bar(periods, demand, alpha=0.3, color='orange', label='Demand Qty')
-
-    plt.scatter(periods, order_qty, marker='^', s=80, color='green', label='Order Qty')
-
-    plt.axhline(y=safety_stock, color='red', linestyle='--', label='Safety Stock')
-
-    plt.xlabel('Period')
-    plt.ylabel('Quantity')
-    plt.title(f'Inventory, Demand, Orders for {sku}')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.show()
-
 ###
 ### Optiguide Initialisation 
 ###
@@ -148,8 +103,10 @@ agent = OptiGuideAgent(name="OptiGuide",
         "config_list": config_list,
     })
 
-user = UserProxyAgent("user", max_consecutive_auto_reply=0,
+user = UserProxyAgent("user", max_consecutive_auto_reply=None,
                          human_input_mode="NEVER", code_execution_config=False)
 
-ans = user.initiate_chat(agent, message="If SKU 449_Australia demand drops by 20% after period 6, what is the impact  ")
+message = input("Please enter your inventory management query and I will get back to you")
+#message= "If SKU 449_Australia demand drops by 20% after period 6, what is the impact?"
+ans = user.initiate_chat(agent, message = message)
 print(ans.summary)
