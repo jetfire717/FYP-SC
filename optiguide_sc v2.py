@@ -1,5 +1,4 @@
-# Commented out IPython magic to ensure Python compatibility.
-# %pip install gurobipy>=10
+    # %pip install gurobipy>=10
 import gurobipy as gp
 from gurobipy import GRB, Model
 
@@ -29,20 +28,7 @@ from typing import Dict, Union, Optional
 
 
 ### Initialisation ###
-
-# Create an environment with your WLS license
 load_dotenv()
-WLSACCESSID = os.getenv("WLSACCESSID")
-WLSSECRET = os.getenv("WLSSECRET")
-LICENSEID = int(os.getenv("LICENSEID"))
-print(WLSACCESSID, WLSSECRET, LICENSEID)
-params = {
-"WLSACCESSID": WLSACCESSID,
-"WLSSECRET": WLSSECRET,
-"LICENSEID": LICENSEID,
-}
-env = gp.Env(params=params)
-
 # Prompt for the OpenAI key securely
 API_KEY = os.getenv("API")
 if not API_KEY:
@@ -87,7 +73,7 @@ demand_std_df = demand_df.std().astype(int)
 ### Optiguide Initialisation 
 ###
 
-with open("source-code.py", "r", encoding="utf-8") as f:
+with open("source_code.py", "r", encoding="utf-8") as f:
     source_code = f.read()
 
 with open("question_example.py", "r", encoding="utf-8") as f:
@@ -103,7 +89,7 @@ agent = OptiGuideAgent(name="OptiGuide",
         "config_list": config_list,
     })
 
-user = UserProxyAgent("user", max_consecutive_auto_reply=None,
+user = UserProxyAgent("user", max_consecutive_auto_reply=3,
                          human_input_mode="NEVER", code_execution_config=False)
 
 message = input("Please enter your inventory management query and I will get back to you")
