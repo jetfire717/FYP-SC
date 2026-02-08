@@ -1,3 +1,7 @@
+###                                                             ###
+###     Contains initial parameter settings and model logic     ###
+###                                                             ###
+
 import gurobipy as gp
 import pandas as pd
 import os
@@ -15,6 +19,8 @@ params = {
 "LICENSEID": LICENSEID,
 }
 env = gp.Env(params=params)
+
+### Import Demand Forecast (csv) ###
 
 forecast_series = pd.read_csv(r"Demand_Forecast.csv")
 forecast_series["Forecasted_Demand"] = forecast_series["Forecasted_Demand"].astype(int)
@@ -43,7 +49,7 @@ import gurobipy as gp
 from gurobipy import GRB
 
 
-# Input globals (filled with recommended figures)
+#### Input globals (filled with recommended figures) ###
 
 # Holding cost per unit (currency units per year)
 holding_cost = {
@@ -61,7 +67,7 @@ order_cost = 750.0          # K (currency per order)
 unit_cost = 5.0             # c (currency per unit)
 
 # Maximum inventory carrying cost threshold (per unit; used as constraint caps)
-max_inventory_cost = {
+warehousing_cost = {
     "212_Malaysia": 2.0,
     "449_Australia": 10.0,
     "797_Malaysia": 8.0,
@@ -127,7 +133,7 @@ skus = list(demand.keys())
 h = to_dict(holding_cost, 2)
 K = to_dict(order_cost, 400)
 c = to_dict(unit_cost, 5)
-r = to_dict(max_inventory_cost, default=0.5)
+w = to_dict(warehousing_cost, default=0.5)
 p = to_dict(stockout_cost, 10.0)
 sl = to_dict(service_level_target, global_service_level_target)
 
@@ -180,7 +186,7 @@ for s in skus:
 
 # Objective
 obj = gp.quicksum(
-    h[s] * I[s, t] + K[s] * y[s, t] + c[s] * Q[s, t] + p[s] * S[s, t] + r[s] * Imax_var[s, t]
+    h[s] * I[s, t] + K[s] * y[s, t] + c[s] * Q[s, t] + p[s] * S[s, t] + w[s] * Imax_var[s, t]
     for s in skus for t in periods
 )
 model.setObjective(obj, GRB.MINIMIZE)
