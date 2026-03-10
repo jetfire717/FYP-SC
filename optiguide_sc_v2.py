@@ -58,7 +58,7 @@ with open("question_example.py", "r", encoding="utf-8") as f:
     example_qa = f.read()
 
 
-agent = OptiGuideAgent(name="OptiGuide",
+optiguide_agent = OptiGuideAgent(name="OptiGuide",
                   source_code = source_code,
                    debug_times=3,
                   example_qa=example_qa,
@@ -67,10 +67,8 @@ agent = OptiGuideAgent(name="OptiGuide",
         "config_list": config_list,
     })
 
-user = UserProxyAgent("user", max_consecutive_auto_reply=3,
+user = UserProxyAgent("user", max_consecutive_auto_reply=1,
                          human_input_mode="ALWAYS", code_execution_config=False)
 
-message = input("Please enter your inventory management query and I will get back to you: ")
-#message = "If SKU 449_Australia demand drops by 20% from 2027 onwards, what is the impact?"
-ans = user.initiate_chat(agent, message = message)
-print(ans.summary)
+ans = user.initiate_chat(optiguide_agent, message = input("Please enter your inventory management query and I will get back to you: "))
+answer_summary = ans.summary
