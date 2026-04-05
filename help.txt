@@ -1,0 +1,4 @@
+optiguide_sc_v2.py: this version is the default that should be used as it does not require porting to cloud
+optiguide_sc_v2.py: version intended to be used for app.py
+app.py: file to create flask http protocol
+source_code.py: contains the mathematical model, built using Gurobi library
