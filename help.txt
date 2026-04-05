@@ -2,3 +2,5 @@ optiguide_sc_v2.py: this version is the default that should be used as it does n
 optiguide_sc_v2.py: version intended to be used for app.py
 app.py: file to create flask http protocol
 source_code.py: contains the mathematical model, built using Gurobi library
+
+IMPORTANT: The files can only be run with a Gurobi WLS license and OpenAI Tokens. Please insert your own custom API keys under a .env file
