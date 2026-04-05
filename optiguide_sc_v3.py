@@ -39,14 +39,14 @@ llm_config = {
 }
 config_list = llm_config["config_list"]
 
-# Read the helper files as text once at startup
+# Read the helper files as text
 with open("source_code.py", "r", encoding="utf-8") as f:
     SOURCE_CODE_TEXT = f.read()
 
 with open("question_example.py", "r", encoding="utf-8") as f:
     EXAMPLE_QA_TEXT = f.read()
 
-# Initialize OptiGuideAgent once (module-level)
+# Initialize OptiGuideAgent (module-level)
 optiguide_agent = OptiGuideAgent(
     name="OptiGuide",
     source_code=SOURCE_CODE_TEXT,
@@ -58,7 +58,7 @@ optiguide_agent = OptiGuideAgent(
     }
 )
 
-# Create a reusable user proxy (if needed)
+# Create user proxy agent
 user = UserProxyAgent("user", max_consecutive_auto_reply=1,
                       human_input_mode="NEVER", code_execution_config=False)
 
@@ -77,9 +77,7 @@ def process_query(user_input: str, reinit_files: bool = False) -> dict:
         # optiguide_agent = OptiGuideAgent(...)
 
     # Use the existing agent and user proxy to run the chat
-    # Note: autogen API may be synchronous or async; adapt if needed
     ans = user.initiate_chat(optiguide_agent, message=user_input)
-    # ans may be an object; extract summary or text
     answer_summary = getattr(ans, "summary", None)
     # fallback to string representation
     if answer_summary is None:

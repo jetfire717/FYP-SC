@@ -6,7 +6,7 @@ import gurobipy as gp
 import pandas as pd
 import os
 from dotenv import load_dotenv
-from graph_plot import plot_inventory_info
+from graph_plot import generate_inventory_plot
 
 # Create an environment with WLS license
 load_dotenv()
@@ -50,70 +50,67 @@ from gurobipy import GRB
 
 
 #### Input globals (filled with recommended figures) ###
+unit_sale_price = {
+    "212_Malaysia": 10.0,
+    "449_Australia": 15.0,
+    "797_Malaysia": 12.0,
+    "852_Australia": 18.0,
+    "864_Australia": 20.0,
+}
 
 # Holding cost per unit (currency units per year)
 holding_cost = {
-    "212_Malaysia": 1.00,    # low-cost consumer item
-    "449_Australia": 2.00,   # higher-volume, moderate holding cost
-    "797_Malaysia": 1.50,    # mid-volume spare part
-    "852_Australia": 3.00,   # very high-volume, larger unit handling cost
-    "864_Australia": 4.00,   # premium / higher-value SKU
+    "212_Malaysia": 0.5,
+    "449_Australia": 1.0,
+    "797_Malaysia": 0.5,
+    "852_Australia": 1.0,
+    "864_Australia": 1.5,
 }
 
 # Fixed cost per order (administration + freight setup)
-order_cost = 750.0          # K (currency per order)
+order_cost = 200.0          # K (currency per order)
 
 # Unit purchase cost (assumed uniform here; replace per SKU if needed)
-unit_cost = 5.0             # c (currency per unit)
-
-# Maximum inventory carrying cost threshold (per unit; used as constraint caps)
-warehousing_cost = {
-    "212_Malaysia": 2.0,
-    "449_Australia": 10.0,
-    "797_Malaysia": 8.0,
-    "852_Australia": 2.5,
-    "864_Australia": 0.5,
-}
+unit_cost = 3.0             # c (currency per unit)
 
 # Penalty cost for stockout per unit of unmet demand
-stockout_cost = 200.0       # p (currency per unit short)
+stockout_cost = 50.0       # p (currency per unit short)
 
 # Target service levels (per-SKU). Use use_global_csl=True to override with global_service_level_target.
 service_level_target = {
-    "212_Malaysia": 0.95,
-    "449_Australia": 0.90,
-    "797_Malaysia": 0.90,
-    "852_Australia": 0.90,
-    "864_Australia": 0.90,
+    "212_Malaysia": 0.90,
+    "449_Australia": 0.88,
+    "797_Malaysia": 0.92,
+    "852_Australia": 0.93,
+    "864_Australia": 0.75,
 }
 
 # Initial on-hand inventory (units) — reasonable starting buffers (adjust to real stock counts)
 initial_inventory = {
-    "212_Malaysia": 3000,
-    "449_Australia": 25000,
-    "797_Malaysia": 2000,
-    "852_Australia": 30000,
-    "864_Australia": 3000,
+    "212_Malaysia": 0,
+    "449_Australia": 0,
+    "797_Malaysia": 0,
+    "852_Australia": 0,
+    "864_Australia": 0,
 }
 
 # Use a single global cycle service level (override per-SKU) if True
-use_global_csl = False
+use_global_csl = True
 global_service_level_target = 0.90
 
 # Big-M for MIP formulations (set to a large finite number to avoid numerical issues)
-bigM = 1_000_000
+bigM = 100000000
 
 # Solver messaging (True to show solver logs)
 solver_msg = False
 
 # Lead time expressed in months
-# Per-SKU lead time dictionary for realism
 lead_time = {
-    "212_Malaysia": 1,   # 1 month
-    "449_Australia": 2,  # 2 months (longer transit / production)
-    "797_Malaysia": 1,   # 1 month
-    "852_Australia": 2,  # 2 months
-    "864_Australia": 1,  # 1 month
+    "212_Malaysia": 1,
+    "449_Australia": 2,
+    "797_Malaysia": 1,
+    "852_Australia": 2,
+    "864_Australia": 1,
 }
 ###
 
@@ -129,11 +126,10 @@ demand_std = demand_std_df.to_dict()
 T = len(next(iter(demand.values())))
 periods = list(range(T))
 skus = list(demand.keys())
-
+SP = to_dict(unit_sale_price, 25)
 h = to_dict(holding_cost, 2)
 K = to_dict(order_cost, 400)
 c = to_dict(unit_cost, 5)
-w = to_dict(warehousing_cost, default=0.5)
 p = to_dict(stockout_cost, 10.0)
 sl = to_dict(service_level_target, global_service_level_target)
 
@@ -172,6 +168,7 @@ model.setParam('OutputFlag', 1 if solver_msg else 0)
 # OPTIGUIDE DATA CODE GOES HERE
 
 # Create variables as tupledicts keyed by (sku, period)
+Revenue = model.addVars(skus, periods, lb=0.0, name="Revenue", vtype=GRB.CONTINUOUS)
 Q = model.addVars(skus, periods, lb=0.0, name="OrderQty", vtype=GRB.CONTINUOUS)
 I = model.addVars(skus, periods, lb=0.0, name="Inventory", vtype=GRB.CONTINUOUS)
 Imax_var = model.addVars(skus, periods, lb=0.0, name="MaxInventory", vtype=GRB.CONTINUOUS)
@@ -184,14 +181,19 @@ for s in skus:
     for t in periods:
         Imax_var[s, t].UB = Imax_ub[s]
 
+
 # Objective
 obj = gp.quicksum(
-    h[s] * I[s, t] + K[s] * y[s, t] + c[s] * Q[s, t] + p[s] * S[s, t] + w[s] * Imax_var[s, t]
+  Revenue[s,t] -  (h[s] * I[s, t] + K[s] * y[s, t] + c[s] * Q[s, t] + p[s] * S[s, t])
     for s in skus for t in periods
 )
-model.setObjective(obj, GRB.MINIMIZE)
+model.setObjective(obj, GRB.MAXIMIZE)
 
 ### Constraints ###
+
+
+
+
 for s in skus:
     Ls = L[s]
     for idx, t in enumerate(periods):
@@ -229,10 +231,15 @@ for s in skus:
         # Stockout linking with Z
         model.addConstr(S[s, t] <= demand_st * (1.0 - Z[s, t]), name=f"stockout_Z_{s}_{t}")
 
+        # Calculate Revenue
+        model.addConstr(Revenue[s, t] == SP[s] * (demand_st - S[s,t]), name=f"rev_link_{s}_{t}")
+
     # Service level per SKU (period-level no-stockout count >= sl[s] * T)
     model.addConstr(gp.quicksum(Z[s, t] for t in periods) >= float(sl[s]) * T,
                     name=f"service_level_{s}")
+    
 
+    
 # Global CSL if requested
 if use_global_csl:
     model.addConstr(gp.quicksum(Z[s, t] for s in skus for t in periods) >=
@@ -258,6 +265,7 @@ Imax_vals = model.getAttr("X", Imax_var)
 y_vals = model.getAttr("X", y)
 S_vals = model.getAttr("X", S)
 Z_vals = model.getAttr("X", Z)
+Revenue_vals = model.getAttr("X", Revenue)
 
 records = []
 for s in skus:
@@ -282,14 +290,15 @@ for s in skus:
             "Stockout": float(s_val) if s_val is not None else None,
             "NoStockout": int(round(z_val)) if z_val is not None else None,
             "SafetyStock": safety_stock[s],
-            "DemandQty": demand_st
+            "DemandQty": demand_st,
+            "Revenue": float(Revenue_vals.get((s, t), 0.0))
         })
 
 result_df = pd.DataFrame(records)
 
 # Return gurobi var objects for inspection purpose (module-level result)
 solution_vars = {
-    "Q": Q, "I": I, "y": y, "Stockout": S, "NoStockout": Z, "MaxInventoryVar": Imax_var
+    "Q": Q, "I": I, "y": y, "Stockout": S, "NoStockout": Z, "MaxInventoryVar": Imax_var, "Revenue": Revenue
 }
 
 res = {
@@ -299,4 +308,12 @@ res = {
     "M": M,
     "gurobi_model": model
 }
+
 # End module-level solver
+def export_to_csv(df, filename="output.csv"):
+    df.to_csv(filename, index=False)
+
+#export_to_csv(result_df)
+
+final_objective_value = model.ObjVal
+print(f"The optimized objective value is: {final_objective_value}")

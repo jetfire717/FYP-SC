@@ -1,9 +1,11 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
+from source_code import result_df
 from optiguide_sc_v3 import process_query  # import the function you created
-
+from graph_plot import generate_inventory_plot
 app = Flask(__name__)
 
 @app.route("/optiguide", methods=["POST"])
+
 def optiguide_endpoint():
     payload = request.get_json(force=True, silent=True) or {}
     user_text = payload.get("text") or payload.get("query") or ""
@@ -17,7 +19,18 @@ def optiguide_endpoint():
     except Exception as e:
         # Return a helpful error message (avoid leaking secrets)
         return jsonify({"error": "Processing failed", "details": str(e)}), 500
+    
 
+@app.route("/plot_inventory", methods=["GET"])
+def plot_inventory():
+    sku = request.args.get("sku")
+    if not sku:
+        return jsonify({"error": "Missing SKU parameter"}), 400
+
+    buf = generate_inventory_plot(result_df, sku)
+    return send_file(buf, mimetype="image/png")
+
+    
 if __name__ == "__main__":
     # For local testing only; in production use a WSGI server (gunicorn/uvicorn)
     app.run(host="0.0.0.0", port=5000, debug=True)
